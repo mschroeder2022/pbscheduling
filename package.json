@@ -1,0 +1,28 @@
+{
+  "name": "pbscheduling",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "auth": "node scripts/graph-auth.js",
+    "sync": "node scripts/sync-calendar.js",
+    "picklr-login": "node scripts/auto-login.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@azure/msal-node": "^5.4.1",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2",
+    "isomorphic-fetch": "^3.0.0",
+    "node-cron": "^4.6.0",
+    "playwright": "^1.61.1",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}

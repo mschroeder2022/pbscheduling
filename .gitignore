@@ -1,0 +1,14 @@
+node_modules/
+
+# Secrets & credentials
+.env
+
+# Local runtime state (session cookies, MSAL refresh tokens, browser profiles,
+# tracked-event store) — contains personal data, never commit.
+.state/
+
+# Recon output (screenshots + dumps of real reservation/calendar data)
+recon-out/
+
+# Logs (contain real calendar event details)
+logs/
