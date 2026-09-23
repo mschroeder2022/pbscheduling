@@ -24,9 +24,12 @@ a refresh token afterward so it never prompts again (survives reboots).
 ## 3. (Delegated) permissions
 1. App → **API permissions** → **Add a permission** → **Microsoft Graph** →
    **Delegated permissions**.
-2. Add: **Calendars.Read**, **offline_access**, **User.Read**.
-   (Later, if the agent ever needs to create/edit events, add **Calendars.ReadWrite**
-   and update `GRAPH_SCOPES` in `.env`.)
+2. Add: **Calendars.ReadWrite**, **offline_access**, **User.Read**.
+   - Reads (sync, `/upcoming`, ...) only use `Calendars.Read`.
+   - `Calendars.ReadWrite` is used for exactly one thing: when you tap
+     **➕ Add to calendar** on a Discord alert about a Picklr reservation that isn't
+     on your calendar, the agent creates that Outlook event. It never writes
+     otherwise. (`GRAPH_WRITE_SCOPES` in `.env`; see "Upgrading to write access" below.)
 3. Admin consent is **not** required for personal-account delegated scopes — you'll
    consent yourself during first sign-in.
 
@@ -57,6 +60,17 @@ drill / unknown) and flagged if it maps to a Picklr venue.
 
 After this, the resident agent (`npm start`, or the auto-start scheduled task) will
 sync on boot and daily without any further prompts.
+
+## Upgrading to write access (orphan-reservation approvals)
+If you signed in before the "Add to calendar" feature existed, the cached consent is
+read-only. Reads keep working. The first time you tap **➕ Add to calendar** in
+Discord, the bot replies "sign-in only has read access" and leaves the buttons in place.
+To fix, once, on the agent box:
+```
+npm run auth
+```
+Sign in with the same device-code flow and approve the calendar **read and write**
+consent. Then tap the button again — no restart needed.
 
 ## Troubleshooting
 - **`AADSTS70002 ... must be marked as 'mobile'`** → "Allow public client flows" is

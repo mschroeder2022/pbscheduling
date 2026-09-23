@@ -2,8 +2,9 @@
 // scrapes each needed location once, matches events to reservations, and updates
 // each event's bookingStatus in the store. Returns per-event results for messaging.
 const log = require('../logger');
-const { checkLocation } = require('./scraper');
+const { checkLocation, checkAll } = require('./scraper');
 const { findReservationForEvent, eventDateAndMinutes } = require('./match');
+const { findOrphanReservations } = require('./orphans');
 const { update, all } = require('../scheduler/store');
 
 // Upcoming (future) Picklr events within `days`, soonest first.
@@ -22,7 +23,9 @@ function gatherUpcomingPicklr(days = 8, nowMs = Date.now()) {
 
 // events: array of tracked events with isPicklrIndoor === true.
 // Returns [{ event, locationOk, booked, reservation, error }].
-async function runPicklrCheck(events, nowMs = Date.now()) {
+// `scans` (optional): pre-fetched { <loc>: { ok, reservations, error } } to reuse
+// instead of scraping again (see runFullPicklrSweep).
+async function runPicklrCheck(events, nowMs = Date.now(), scans = null) {
   const byLoc = new Map();
   for (const e of events) {
     if (!e.isPicklrIndoor || !e.picklrLocation) continue;
@@ -32,7 +35,7 @@ async function runPicklrCheck(events, nowMs = Date.now()) {
 
   const results = [];
   for (const [loc, locEvents] of byLoc) {
-    const scan = await checkLocation(loc, nowMs); // one headed scrape per location
+    const scan = (scans && scans[loc]) || await checkLocation(loc, nowMs); // one headed scrape per location
     for (const event of locEvents) {
       if (!scan.ok) {
         results.push({ event, locationOk: false, booked: null, reservation: null, error: scan.error });
@@ -51,4 +54,16 @@ async function runPicklrCheck(events, nowMs = Date.now()) {
   return results;
 }
 
-module.exports = { runPicklrCheck, gatherUpcomingPicklr };
+// Full sweep: scrape ALL configured locations (not just ones with calendar events),
+// match tracked events against the scans, AND detect orphan reservations — booked
+// courts with no matching calendar event. One scrape serves both directions.
+async function runFullPicklrSweep(nowMs = Date.now(), days = 8) {
+  const events = gatherUpcomingPicklr(days, nowMs);
+  const scans = await checkAll(nowMs);
+  const results = await runPicklrCheck(events, nowMs, scans);
+  const orphans = findOrphanReservations(scans, all(), nowMs);
+  if (orphans.length) log.info(`[picklr] ${orphans.length} reservation(s) with no matching calendar event.`);
+  return { results, orphans, scans };
+}
+
+module.exports = { runPicklrCheck, gatherUpcomingPicklr, runFullPicklrSweep };

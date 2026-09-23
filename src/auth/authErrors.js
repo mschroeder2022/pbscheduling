@@ -18,4 +18,17 @@ function isAuthSetupError(err) {
   return isNoClientId(err) || isNeedsSignIn(err);
 }
 
-module.exports = { isNoClientId, isNeedsSignIn, isAuthSetupError };
+// True when a calendar WRITE failed because the cached Microsoft consent only
+// covers read scopes (MSAL interaction/consent-required, or Graph 403). Fix is a
+// one-time `npm run auth` re-consent that includes Calendars.ReadWrite.
+function needsConsent(err) {
+  if (!err) return false;
+  const code = `${err.errorCode || err.code || ''}`;
+  if (/interaction_required|consent_required|invalid_grant|login_required/i.test(code)) return true;
+  if (err.name === 'InteractionRequiredAuthError') return true;
+  if (err.statusCode === 403 || err.code === 'ErrorAccessDenied') return true;
+  const msg = `${err.message || ''} ${err.body || ''}`;
+  return /AADSTS65001|AADSTS50076|AADSTS70011|consent|Access is denied|ErrorAccessDenied|interaction_required/i.test(msg);
+}
+
+module.exports = { isNoClientId, isNeedsSignIn, isAuthSetupError, needsConsent };

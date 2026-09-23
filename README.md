@@ -25,6 +25,15 @@ sign-up/booking reminders + Picklr indoor-court reservation checks. See
 - **Step 6 — on-demand commands:** ✅ DONE. `/status`, `/check-signups`,
   `/check-picklr` (plus `/upcoming`, `/ping`).
 - **All build steps (0–6) complete.**
+- **Orphan reservations → approve in Discord:** ✅ DONE. The 7am sweep (and
+  `/check-picklr`) also looks the other way: a **booked** Picklr court with no
+  matching Outlook event is posted to Discord once, with **➕ Add to calendar** /
+  **🚫 Don't add** buttons. Tapping Add is the only time the agent writes to your
+  calendar — it creates `Rec game @ The Picklr <venue> (Court N)` for that slot and
+  marks the court booked. Don't add = never added, never asked again. Needs a
+  one-time `npm run auth` re-consent for `Calendars.ReadWrite` (see
+  `docs/graph-setup.md`). State: `.state/orphan-alerts.json`.
+  (`src/picklr/orphans.js`, `src/calendar/write.js`)
 
 ## Setup
 1. `npm install` (already done in this checkout)

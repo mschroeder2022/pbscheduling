@@ -126,21 +126,97 @@ async function handleCheckSignups(interaction) {
   }
 }
 
-// Trigger a live READ-ONLY Picklr scrape now and report booking status.
+// Trigger a live READ-ONLY Picklr scrape now: booking status for upcoming sessions
+// plus any orphan reservations (booked courts with no calendar event). Sweeps all
+// locations even when the calendar has no Picklr sessions — that's exactly when an
+// orphan would otherwise go unseen.
 async function handleCheckPicklr(interaction) {
   await interaction.deferReply();
   // Lazy require to avoid any load-order coupling with the scheduler.
-  const { runPicklrCheck, gatherUpcomingPicklr } = require('../picklr/check');
-  const { picklrDigest } = require('../scheduler/messages');
+  const { runFullPicklrSweep } = require('../picklr/check');
+  const { picklrDigest, picklrOrphans, picklrOrphanAlert } = require('../scheduler/messages');
+  const { alertFor, markAlerted } = require('../picklr/orphans');
   try {
-    const events = gatherUpcomingPicklr(8);
-    if (!events.length) return interaction.editReply('No upcoming Picklr sessions in the next 8 days.');
-    await interaction.editReply(`🏓 Checking ${events.length} Picklr session(s) — this takes ~1-2 min (read-only, never books)...`);
-    const results = await runPicklrCheck(events);
-    await interaction.editReply(picklrDigest(results).content);
+    await interaction.editReply('🏓 Sweeping all Picklr locations — this takes ~2-3 min (read-only, never books)...');
+    const { results, orphans } = await runFullPicklrSweep();
+    let content = picklrDigest(results).content;
+    // Orphans the user already declined: list them, no buttons. Everything else
+    // (never alerted, or still pending) gets its own approve/decline message.
+    const ignored = orphans.filter(o => (alertFor(o) || {}).status === 'ignored');
+    const askable = orphans.filter(o => (alertFor(o) || {}).status !== 'ignored');
+    if (ignored.length) {
+      content += `\n\n${picklrOrphans(ignored, {
+        header: '🔕 **Booked at the Picklr, not on your calendar (you chose not to add):**',
+      }).content}`;
+    }
+    if (askable.length) content += `\n\n🚨 ${askable.length} reservation(s) not on your calendar — see below to approve.`;
+    await interaction.editReply(content);
+    for (const o of askable) {
+      await interaction.followUp(picklrOrphanAlert(o));
+      markAlerted([o]);
+    }
   } catch (err) {
     log.error(`/check-picklr failed: ${err.message || err}`);
     await interaction.editReply('Picklr check failed. Check the agent logs.');
+  }
+}
+
+// Orphan-reservation buttons: pb|orphan|add|<shortId> / pb|orphan|skip|<shortId>.
+// "add" is the ONLY path on which the agent writes to the Outlook calendar, and it
+// runs only after the user taps the button. "skip" records the decision so the
+// reservation is never added and never asked about again.
+async function handleOrphanButton(interaction, answer, shortId) {
+  const { getAlert, setAlertStatus } = require('../picklr/orphans');
+  const { createPicklrEvent } = require('../calendar/write');
+  const { needsConsent, isAuthSetupError } = require('../auth/authErrors');
+  const { fmtWhen } = require('./format');
+
+  const alert = getAlert(shortId);
+  if (!alert) {
+    return interaction.reply({ content: 'That reservation alert has expired (the slot is past or no longer tracked).', ephemeral: true }).catch(() => {});
+  }
+  const finish = (line) => interaction.editReply({
+    content: `${interaction.message.content}\n\n${line}`, components: [],
+  }).catch(() => interaction.followUp({ content: line, ephemeral: true }).catch(() => {}));
+
+  if (alert.status === 'added') {
+    return interaction.reply({ content: '✅ Already added to your calendar.', ephemeral: true }).catch(() => {});
+  }
+  if (alert.status === 'ignored') {
+    return interaction.reply({ content: '🚫 You already chose not to add this one.', ephemeral: true }).catch(() => {});
+  }
+
+  // Acknowledge within Discord's 3s limit; the Graph write can take a few seconds.
+  await interaction.deferUpdate().catch(() => {});
+
+  if (answer !== 'add') {
+    setAlertStatus(shortId, 'ignored', { decidedBy: interaction.user.tag });
+    log.info(`Discord: ${interaction.user.tag} declined adding orphan ${alert.key} to the calendar.`);
+    return finish("🚫 **Not added.** I won't add this reservation to your calendar or ask about it again.");
+  }
+
+  try {
+    const created = await createPicklrEvent({ location: alert.location, reservation: alert.reservation });
+    // Track it immediately (don't wait for the next calendar sync). The court is
+    // known-booked, so pre-confirm booking and skip the 1-week "is it booked?" ask.
+    store.upsertFromCalendar([created]);
+    store.update(created.id, { bookingStatus: 'confirmed', weekCheckSent: true });
+    setAlertStatus(shortId, 'added', { eventId: created.id, decidedBy: interaction.user.tag });
+    log.info(`Discord: ${interaction.user.tag} approved orphan ${alert.key} — created calendar event "${created.title}" (${created.id.slice(0, 12)}…).`);
+    const when = fmtWhen(created.startRaw, created.startTime);
+    return finish(`✅ **Added to your Outlook calendar:** ${created.title}\n${when} · court marked booked. You'll get the usual 2-hour reminder.`);
+  } catch (err) {
+    log.error(`Orphan add failed for ${alert.key}: ${err.message || err}`);
+    let why;
+    if (isAuthSetupError(err)) {
+      why = 'the agent is not signed in to Microsoft. Run `npm run auth` on the agent box, then tap the button again.';
+    } else if (needsConsent(err)) {
+      why = 'the agent\'s Microsoft sign-in only has **read** access to the calendar. On the agent box run `npm run auth` once to grant Calendars.ReadWrite, then tap **Add to calendar** again.';
+    } else {
+      why = `the calendar write failed (${String(err.message || err).slice(0, 200)}). Check the agent logs and tap the button again to retry.`;
+    }
+    // Leave the buttons in place so the user can retry after fixing the cause.
+    return interaction.followUp({ content: `⚠️ Not added — ${why}`, ephemeral: true }).catch(() => {});
   }
 }
 
@@ -149,6 +225,7 @@ async function handleButton(interaction) {
   const parts = interaction.customId.split('|');
   if (parts[0] !== 'pb') return;
   const [, kind, answer, shortId] = parts;
+  if (kind === 'orphan') return handleOrphanButton(interaction, answer, shortId);
   const tracked = store.findByShortId(shortId);
   if (!tracked) {
     return interaction.reply({ content: 'That event is no longer tracked.', ephemeral: true }).catch(() => {});

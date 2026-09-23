@@ -14,7 +14,8 @@ const { graph } = require('../src/config');
   try {
     console.log(`Signing in for calendar account: ${graph.calendarAccount}`);
     console.log(`Authority: ${graph.authority}`);
-    console.log(`Scopes: ${graph.scopes.join(', ')}`);
+    console.log(`Scopes: ${graph.signInScopes.join(', ')}`);
+    console.log('The code below expires in ~15 minutes — complete the sign-in promptly.');
     const result = await signInInteractive();
     console.log(`\nSuccess. Signed in as: ${result.account && result.account.username}`);
     console.log('Refresh token cached to .state/msal-cache.json — the app will not prompt again.');

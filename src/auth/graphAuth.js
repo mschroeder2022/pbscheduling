@@ -61,7 +61,7 @@ async function getCachedAccount(pca) {
 async function signInInteractive() {
   const pca = buildPca();
   const result = await pca.acquireTokenByDeviceCode({
-    scopes: graph.scopes,
+    scopes: graph.signInScopes,
     deviceCodeCallback: (info) => {
       console.log('\n==================== SIGN IN ====================');
       if (info && info.message) {
@@ -79,7 +79,11 @@ async function signInInteractive() {
 }
 
 // Silent token for the app. Refreshes automatically via the cached refresh token.
-async function getAccessToken() {
+// `scopes` defaults to the read scopes; pass graph.writeScopes for calendar writes.
+// If the cached consent doesn't cover the requested scopes (e.g. write scopes
+// before the user re-ran graph-auth), MSAL throws an interaction-required error —
+// see needsConsent() in authErrors.js.
+async function getAccessToken(scopes = graph.scopes) {
   const pca = buildPca();
   const account = await getCachedAccount(pca);
   if (!account) {
@@ -87,7 +91,7 @@ async function getAccessToken() {
     e.code = 'NEEDS_INTERACTIVE_SIGN_IN';
     throw e;
   }
-  const result = await pca.acquireTokenSilent({ account, scopes: graph.scopes });
+  const result = await pca.acquireTokenSilent({ account, scopes });
   return result.accessToken;
 }
 

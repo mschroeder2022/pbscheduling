@@ -6,9 +6,10 @@ const log = require('../logger');
 const { fetchUpcomingEvents } = require('../calendar/sync');
 const { upsertFromCalendar, update, all } = require('./store');
 const { evaluateEvent } = require('./triggers');
-const { build, picklrResult, picklrDigest } = require('./messages');
+const { build, picklrResult, picklrDigest, picklrOrphanAlert } = require('./messages');
 const { sendNotification, isReady } = require('../discord/bot');
-const { runPicklrCheck, gatherUpcomingPicklr } = require('../picklr/check');
+const { runPicklrCheck, runFullPicklrSweep } = require('../picklr/check');
+const { filterUnalerted, markAlerted } = require('../picklr/orphans');
 
 async function tick(reason = 'tick') {
   let events;
@@ -56,15 +57,31 @@ async function tick(reason = 'tick') {
   return fired;
 }
 
-// Daily 7am automated Picklr reservation check for all upcoming Picklr sessions.
-// Posts a booking-status digest and highlights anything not booked.
+// Daily 7am automated Picklr reservation check. Scrapes ALL locations so it can
+// both verify upcoming sessions are booked AND catch orphan reservations (booked
+// courts with no calendar event) — which is why it no longer skips when the
+// calendar has no Picklr sessions. Each orphan is alerted once, as its own message
+// with "Add to calendar" / "Don't add" buttons; the Outlook event is only created
+// when the user approves (see discord/bot.js handleOrphanButton).
 async function picklr7amJob(days = 8) {
   if (!isReady()) { log.warn('7am Picklr job: Discord not ready, skipping.'); return; }
-  const events = gatherUpcomingPicklr(days);
-  if (!events.length) { log.info('7am Picklr job: no upcoming Picklr sessions.'); return; }
-  log.info(`7am Picklr job: checking ${events.length} upcoming Picklr session(s) (read-only).`);
-  const results = await runPicklrCheck(events);
-  await sendNotification(picklrDigest(results));
+  log.info('7am Picklr job: full read-only sweep of all Picklr locations.');
+  const { results, orphans } = await runFullPicklrSweep(Date.now(), days);
+  if (results.length) await sendNotification(picklrDigest(results));
+  else log.info('7am Picklr job: no upcoming Picklr sessions on the calendar.');
+  await alertNewOrphans(orphans);
+}
+
+// Post one approve/decline alert per not-yet-alerted orphan. Returns how many fired.
+async function alertNewOrphans(orphans, send = sendNotification) {
+  const fresh = filterUnalerted(orphans);
+  let fired = 0;
+  for (const o of fresh) {
+    const ok = await send(picklrOrphanAlert(o));
+    if (ok) { markAlerted([o]); fired++; }
+  }
+  if (fired) log.info(`Orphan alerts: posted ${fired} approve/decline prompt(s) to Discord.`);
+  return fired;
 }
 
 function startScheduler() {
@@ -75,4 +92,4 @@ function startScheduler() {
   setTimeout(() => tick('startup').catch(e => log.error(`startup tick: ${e.message || e}`)), 4000);
 }
 
-module.exports = { startScheduler, tick, picklr7amJob };
+module.exports = { startScheduler, tick, picklr7amJob, alertNewOrphans };

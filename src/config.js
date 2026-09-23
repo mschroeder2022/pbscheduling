@@ -20,9 +20,13 @@ module.exports = {
     // like "<guid>" doesn't get sent verbatim.
     clientId: (process.env.AZURE_CLIENT_ID || '').trim().replace(/^[<"']+|[>"']+$/g, ''),
     authority: `https://login.microsoftonline.com/${(process.env.AZURE_AUTHORITY || 'consumers').trim()}`,
-    // Read-only for now (step 1). Bump to Calendars.ReadWrite later if the agent
-    // ever needs to write events. offline_access => we get a refresh token.
+    // READ scopes: used for every calendar read (sync, /upcoming, ...). Kept at
+    // Calendars.Read so reads keep working on a token that was consented before
+    // the write feature existed. offline_access => we get a refresh token.
     scopes: (process.env.GRAPH_SCOPES || 'Calendars.Read offline_access User.Read').split(/\s+/),
+    // WRITE scopes: used ONLY when the user approves adding a Picklr reservation to
+    // the calendar from Discord. Needs a one-time re-consent (npm run auth).
+    writeScopes: (process.env.GRAPH_WRITE_SCOPES || 'Calendars.ReadWrite offline_access User.Read').split(/\s+/),
     calendarAccount: process.env.CALENDAR_ACCOUNT || '',
     tokenCachePath: path.join(STATE_DIR, 'msal-cache.json'),
   },
@@ -46,3 +50,7 @@ module.exports = {
   // How far ahead the calendar sweep looks.
   syncWindowDays: parseInt(process.env.SYNC_WINDOW_DAYS || '35', 10),
 };
+
+// Interactive sign-in requests the union of read + write scopes so one consent
+// covers everything the agent can do.
+module.exports.graph.signInScopes = [...new Set([...module.exports.graph.scopes, ...module.exports.graph.writeScopes])];
